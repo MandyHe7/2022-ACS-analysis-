@@ -1,0 +1,202 @@
+---
+title: "2022 ACS Analysis using Ratio Estimators"
+author: 
+  - "Mandy He, Lorina Yang, Ruiying Li, Wendy Yuan, Benjamin Fleurence"
+date: October 03, 2024
+date-format: long
+format: pdf
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+
+# Load necessary libraries
+library(haven)
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+# Load the dataset
+ipums_extract <- read_dta("~/Desktop/usa_00001.dta.gz")
+
+# Convert selected columns to factors
+ipums_extract <- ipums_extract %>%
+  select(stateicp, sex, age, educd) %>%
+  mutate(across(everything(), as_factor))
+
+#Clean data set IPUMS
+cleaned_ipums <-
+  ipums_extract |>
+  mutate(age = as.numeric(age)) |>
+  filter(age >= 18) |>
+  rename(gender = sex) |>
+  mutate(
+    age_group = case_when(
+      age <= 29 ~ "18-29",
+      age <= 44 ~ "30-44",
+      age <= 59 ~ "45-59",
+      age >= 60 ~ "60+",
+      TRUE ~ "Trouble"
+    ),
+    education_level = case_when(
+      educd %in% c(
+        "nursery school, preschool", "kindergarten", "grade 1",
+        "grade 2", "grade 3", "grade 4", "grade 5", "grade 6",
+        "grade 7", "grade 8", "grade 9", "grade 10", "grade 11",
+        "12th grade, no diploma", "regular high school diploma",
+        "ged or alternative credential", "no schooling completed"
+      ) ~ "High school or less",
+      educd %in% c(
+        "some college, but less than 1 year",
+        "1 or more years of college credit, no degree"
+      ) ~ "Some post sec",
+      educd  %in% c("associate's degree, type not specified",
+                    "bachelor's degree") ~ "Post sec +",
+      educd %in% c(
+        "master's degree",
+        "professional degree beyond a bachelor's degree",
+        "doctoral degree"
+      ) ~ "Grad degree",
+      TRUE ~ "Trouble"
+    )
+  ) |>
+  select(gender, age_group, education_level, stateicp) |>
+  mutate(across(c(
+    gender, stateicp, education_level, age_group),
+    as_factor)) |>
+  mutate(age_group =
+           factor(age_group, levels = c("18-29", "30-44", "45-59", "60+")))
+
+#Create new file 
+write_csv(x = cleaned_ipums,
+          file = "cleaned_ipums.csv")
+```
+
+# Introduction
+
+The following packages in R (@citeR) were used in the data analysis process: tidyverse (@tidyverse), dplyr (@dplyr), knitr (@knitr), readr (@readr), and ggplot2 (@ggplot2). 
+
+Instructions of how to obtain the data
+
+1.  Create a user/log into IPUMS account
+2.  Navigate to IPUMS USA site
+3.  Create a custom data set by clicking on the “Get Data” button
+4.  Select samples for only ACS 2022 and submit sample selection from [@ipumsusa]
+5.  Under select harmonized variables select ‘geographic’ from the ‘household’ dropdown menu
+    1.  Select the ‘STATEICP’ variable
+6.  Under select harmonized variables select ’demographic’ from the ‘person’ dropdown menu
+    1.  Select the ’SEX’ variable
+7.  Under select harmonized variables select ’education’ from the ‘person’ dropdown menu
+    1.  Section the ‘EDUC’ variable
+8.  Click view cart and create data extract
+9.  Set up data format to be .csv and submit extract
+10. Wait for data to be processed for download
+11. Download the .csv when the status of the data is completed
+12. Read the datafile once downloaded using the read_csv() function in R from the readr package
+
+# Ratio Estimators Approach
+
+Ratio estimator is a statistical method used to estimate a total population by looking at the ratio between two related variables in a sample, since it is difficult to measure the entire population directly. By finding the ratio of a specific characteristic to the total sample size, this ratio can then be applied to estimate the full population based on available sample data.
+
+In our case, we aim to estimate the total number of respondents in each state using the ratio estimator approach, based on the number of individuals with doctoral degrees (EDUCD) in California. Since we know that California has a total of 391,171 respondents across all education levels and the number of respondents with doctoral degrees, we can calculate the ratio of doctoral degree holders to the total population in California. Assuming this ratio is similar across other states, we can then use it to estimate the total number of respondents in each state. This is done by dividing the number of doctoral degree holders in each state by the ratio calculated for California, giving an estimate of the total population of respondents for each state.
+
+```{r}
+#| warning: false
+#| message: false
+#| label: fig-figure1
+#| fig-cap: "Number of Respondents Based on Education Level and Age"
+#| fig_caption: true
+#| echo: false
+
+library(ggplot2)
+#Create graphs 
+cleaned_ipums |>
+  ggplot(mapping = aes(x = age_group, fill = gender)) +
+  geom_bar(position = "dodge2") +
+  theme_minimal() +
+  labs(
+    x = "Age-group of respondent",
+    y = "Number of respondents",
+    fill = "Education"
+  ) +
+  facet_wrap(vars(education_level)) +
+  guides(x = guide_axis(angle = 90)) +
+  theme(legend.position = "bottom") +
+  scale_fill_brewer(palette = "Set1")
+```
+
+\newpage
+
+In [@tbl-table1] ,the estimate is significantly greatly then the actual count of number of respondents with doctoral degrees. This is likely because we assumed that the ratio for California is similar to the ratio for other states.
+
+```{r}
+#| warning: false
+#| message: false
+#| tbl-cap: "Difference Estimate vs Actual Number of Respondants per State"
+#| label: tbl-table1
+#| echo: false
+
+# Load necessary libraries
+library(haven)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+# Filter for respondents with a doctoral degree, group by state, and count
+doctoral_data <- ipums_extract %>%
+  filter(educd == "doctoral degree") %>%  # Adjust if "doctoral degree" is named differently
+  group_by(stateicp) %>%
+  summarize(doctoral_count = n())
+
+# Given value for California
+total_respondents_ca <- 391171
+
+# Calculate the ratio of doctoral degree holders to total respondents in California
+ratio_ca <- doctoral_data %>%
+  filter(stateicp == "california") %>%
+  summarize(ratio = doctoral_count / total_respondents_ca) %>%
+  pull(ratio)
+
+# Estimate total respondents for each state using the ratio
+estimated_respondents <- doctoral_data %>%
+  mutate(estimated_total = round(doctoral_count / ratio_ca)) # Apply the ratio
+
+# Count actual respondents in your dataset by state
+actual_counts_by_state <- cleaned_ipums %>%
+  group_by(stateicp) %>%
+  summarize(actual_count = n(), .groups = "drop")
+
+# Join actual counts with estimated counts
+final_comparison <- estimated_respondents %>%
+  left_join(actual_counts_by_state, by = "stateicp")
+
+# Calculate the difference between estimated and actual counts
+final_comparison <- final_comparison %>%
+  mutate(difference = estimated_total - actual_count)
+
+# View the final comparison table
+kable(final_comparison)
+```
+
+# Difference in estimate vs actual number of respondents
+
+1.  Sampling variability
+
+The ratio estimator is based on the assumption that the ratio of doctoral degree holders to the total respondents in California applies to all other states. However, the true ratio may differ from state to state due to differences in educational attainment across regions. Some states might have a higher or lower proportion of doctoral degree holders compared to California, leading to inaccuracies when applying the California ratio to other states.
+
+2.  Non-uniform education attainment
+
+Educational attainment, including the proportion of respondents with doctoral degrees, is not uniform across the U.S. Factors such as state demographics, local economies, and educational infrastructure affect the number of people with higher degrees. States with large research universities (e.g., Massachusetts) may have more doctoral degree holders, whereas others may have fewer.
+
+3.  Survey non-response
+
+Not all selected participants respond to the ACS survey. If the non-response rate is high and if those who don't respond differ systematically from those who do (for instance, in their level of education), the actual total counts could deviate from the estimates. The ratio estimator does not account for non-response bias.
+
+\newpage
+
+# Reference
